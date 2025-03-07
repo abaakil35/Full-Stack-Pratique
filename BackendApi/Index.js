@@ -1,89 +1,105 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
-const session = require('express-session');
+const { MongoClient } = require("mongodb");
+const bcrypt = require("bcryptjs");
+const express = require("express");
+const cors = require("cors");
 
 const app = express();
-app.use(express.json()); // Middleware for JSON parsing
+app.use(express.json());
+app.use(cors());
 
-// Configure session
-app.use(session({
-  secret: 'your_secret_key', // Change this to a strong secret key
-  resave: false,
-  saveUninitialized: true,
-  cookie: { secure: false } // Set `secure: true` if using HTTPS
-}));
+const uri = "mongodb://127.0.0.1:27017"; // MongoDB connection string
+const client = new MongoClient(uri);
+const dbName = "Login&Register"; // Updated database name
 
-// Connect to MongoDB using the new database name and collection
-mongoose.connect('mongodb://localhost:27017/Login&Register', { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => console.log('Connected to MongoDB (Login&Register database)'))
-  .catch(err => console.error('MongoDB connection error:', err));
+let db; // Database reference
 
-// User Schema
-const userSchema = new mongoose.Schema({
-  username: { type: String, required: true, unique: true },
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true }
+// Connect to MongoDB
+async function connectToDatabase() {
+  try {
+    await client.connect();
+    console.log("Connected to MongoDB");
+    db = client.db(dbName); // Set the database instance
+  } catch (err) {
+    console.error("Error connecting to MongoDB:", err);
+    process.exit(1);
+  }
+}
+
+// Initialize the database connection
+connectToDatabase();
+
+// Test route
+app.get("/", (req, res) => {
+  res.send("Hello World");
 });
 
-// Specify the collection name as "users" to match your Mongo shell query
-const User = mongoose.model('User', userSchema, 'users'); // Use "users" collection
-
-// **Register Endpoint**
-app.post('/register', async (req, res) => {
-  const { username, email, password } = req.body;
-
-  // Check if user already exists
-  const existingUser = await User.findOne({ $or: [{ email }, { username }] });
-  if (existingUser) {
-    return res.status(400).json({ message: 'User already exists' });
-  }
-
-  // Hash password
-  const hashedPassword = await bcrypt.hash(password, 10);
-
-  // Create a new user object
-  const newUser = new User({ username, email, password: hashedPassword });
+// Registration endpoint
+app.post("/register", async (req, res) => {
+  console.log("POST /register");
 
   try {
-    // Save the user to the database
-    await newUser.save();
-    console.log('User registered:', newUser);  // Log the user object to check if it saved successfully
-    res.status(201).json({ message: 'User registered successfully' });
-  } catch (error) {
-    console.error('Error saving user:', error);  // Log the error
-    res.status(500).json({ message: 'Error saving user', error: error.message });
+    const { email, username, password } = req.body;
+
+    if (!email || !username || !password) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const data = {
+      email,
+      username,
+      password: hashedPassword,
+    };
+
+    // Insert user into the 'users' collection
+    const result = await db.collection("users").insertOne(data);
+
+    // Log the result
+    console.log("User inserted:", result);
+
+    res.status(201).json({ message: "User registered successfully", userId: result.insertedId });
+  } catch (err) {
+    console.error("Error during registration:", err);
+    res.status(500).json({ message: "Error during registration" });
   }
 });
 
-// **Login Endpoint**
-app.post('/login', async (req, res) => {
-  const { email, password } = req.body;
+// Login endpoint
+app.post("/login", async (req, res) => {
+  console.log("POST /login", req.body);
 
-  // Trim any unnecessary spaces from email
-  const trimmedEmail = email.trim();
+  try {
+    const { email, password } = req.body;
 
-  // Find user by email (case-insensitive)
-  const user = await User.findOne({ email: new RegExp('^' + trimmedEmail + '$', 'i') });
-  if (!user) {
-    return res.status(400).json({ message: 'User not found' });
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password are required" });
+    }
+
+    // Find the user in the 'users' collection
+    const user = await db.collection("users").findOne({ email });
+
+    console.log("User found:", user); // Add this line to check if the user exists
+
+    if (!user) {
+      return res.status(400).json({ message: "Invalid email or password" });
+    }
+
+    const isPasswordMatch = await bcrypt.compare(password, user.password);
+
+    if (!isPasswordMatch) {
+      return res.status(400).json({ message: "Invalid email or password" });
+    }
+
+    res.status(200).json({ message: "Login successful", userId: user._id });
+  } catch (err) {
+    console.error("Error during login:", err);
+    res.status(500).json({ message: "Error during login" });
   }
-
-  // Check password
-  const isMatch = await bcrypt.compare(password, user.password);
-  if (!isMatch) {
-    return res.status(400).json({ message: 'Incorrect password' });
-  }
-
-  // Create session
-  req.session.userId = user._id;
-  req.session.username = user.username;
-
-  res.status(200).json({ message: 'Login successful' });
 });
 
-// Start Server
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// Start server
+const port = 5000;
+app.listen(port, () => {
+  console.log(`Server running on http://localhost:${port}`);
 });
