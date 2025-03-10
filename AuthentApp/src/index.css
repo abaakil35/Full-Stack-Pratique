@@ -51,3 +51,8 @@ button:hover {
 .message.error {
   color: red;
 }
+
+.login-progress{
+  margin-top: 10px;
+  justify-content: center;
+}
